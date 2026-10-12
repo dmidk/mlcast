@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   init. `SourceDataDataModule` takes per-split `train_selector` and `eval_selector` arguments; the default
   experiment uses importance sampling on train and uniform 10% sampling on val/test.
   [#17](https://github.com/mlcast-community/mlcast/pull/17) @franchg @leifdenby @noralinn
+- (DMI only) `dmi_500m_10min_convgru_experiment` config (`src/mlcast/config/dmi.py`): ConvGRU training on DMI's
+  500 m / 10 min radar composite with its precomputed sampling index, 6 input / 18 forecast steps (1 h in → 3 h
+  lead), fixed calendar-year splits (2016–2023 train / 2024 val / 2025 test), and logging to DMI's MLflow server.
+  @leifdenby
 
 ### Changed
 
@@ -42,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the new `cpu` and `gpu-cu126` extras or the existing `gpu-cu128` / `gpu-cu130` extras
   (`uv sync --extra cpu`, `pip install "mlcast[cpu]"`). After a one-time `uv sync --extra ...`, plain `uv run`
   no longer swaps the installed PyTorch build. [#30](https://github.com/mlcast-community/mlcast/pull/30) @leifdenby
+- (DMI only) `batch_size` raised from 16 to 32 in the DMI config; at 16 the A40 on `ohm.dmi.dk` used only ~43% of
+  its GPU memory. @leifdenby
 
 ### Fixed
 
