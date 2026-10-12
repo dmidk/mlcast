@@ -6,7 +6,10 @@ forecast horizon, and fixed calendar-year splits instead of the default
 ratio split.
 """
 
+import datetime
+
 import fiddle as fdl
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from .base import Experiment, training_experiment
 from .fiddlers import set_variables, use_mlflow_logger
@@ -14,6 +17,7 @@ from .fiddlers import set_variables, use_mlflow_logger
 ZARR_PATH = "/dmidata/projects/radar/products/composite/zarrComposite/tmp_folder/DMI_500m_10min_v012.zarr"
 INDEX_PATH = "/nwp/lcd/mlcast/sampling_index_2016-02-29-2025-12-31_24x256x256_3x16x16_10000.parquet"
 MLFLOW_TRACKING_URI = "https://mlflow.dmidev.org/"
+CHECKPOINT_EVERY_HOURS = 3
 
 
 def dmi_500m_10min_convgru_experiment() -> fdl.Config[Experiment]:
@@ -36,6 +40,9 @@ def dmi_500m_10min_convgru_experiment() -> fdl.Config[Experiment]:
       val / 2025 test) instead of the default ratio split, so the 2025
       test season can never be contaminated by a ratio boundary landing
       mid-year;
+    - an extra checkpoint callback saving a checkpoint every
+      `CHECKPOINT_EVERY_HOURS` hours of training, kept alongside the
+      best-loss checkpoints;
     - the trainer logger to MLflow, pointed at the project's tracking
       server.
 
@@ -84,6 +91,21 @@ def dmi_500m_10min_convgru_experiment() -> fdl.Config[Experiment]:
             "test": ("2025-01-01", "2025-12-31"),
         }
     }
+
+    # Time-based checkpoints (Lightning's ModelCheckpoint `train_time_interval`,
+    # checked at the end of each training batch), kept alongside the
+    # best-val_loss/train_loss checkpoints. `save_top_k=-1` keeps every one; the
+    # distinct filename prefix stops them colliding with the top-k callbacks'
+    # default `{epoch}-{step}` names. The timedelta is itself an fdl.Config so
+    # the config graph stays serialisable to YAML.
+    cfg.trainer.callbacks.append(
+        fdl.Config(
+            ModelCheckpoint,
+            filename=f"every-{CHECKPOINT_EVERY_HOURS}h-{{epoch}}-{{step}}",
+            save_top_k=-1,
+            train_time_interval=fdl.Config(datetime.timedelta, hours=CHECKPOINT_EVERY_HOURS),
+        )
+    )
 
     cfg.trainer.logger.name = "dmi-500m-10min-convgru"
     use_mlflow_logger(cfg, tracking_uri=MLFLOW_TRACKING_URI)

@@ -1,7 +1,12 @@
+import datetime
+from pathlib import Path
+
 import fiddle as fdl
+from fiddle.experimental.yaml_serialization import dump_yaml
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 
-from mlcast.config import dmi_500m_10min_convgru_experiment, validate_config
+from mlcast.config import dmi_500m_10min_convgru_experiment, load_yaml_config, validate_config
 
 
 def test_dmi_500m_10min_convgru_experiment_config():
@@ -29,3 +34,27 @@ def test_dmi_500m_10min_convgru_experiment_config():
 
     validate_config(cfg)
     fdl.build(cfg)  # succeeds without touching the filesystem
+
+
+def _time_based_checkpoints(callbacks: list) -> list[ModelCheckpoint]:
+    # `_train_time_interval` is Lightning's private attribute holding the
+    # `train_time_interval` argument; ModelCheckpoint has no public accessor.
+    return [cb for cb in callbacks if isinstance(cb, ModelCheckpoint) and cb._train_time_interval is not None]
+
+
+def test_dmi_config_checkpoints_every_3_hours(tmp_path: Path) -> None:
+    cfg = dmi_500m_10min_convgru_experiment()
+
+    (ckpt,) = _time_based_checkpoints(fdl.build(cfg).trainer.callbacks)
+    assert ckpt._train_time_interval == datetime.timedelta(hours=3)
+    assert ckpt.save_top_k == -1
+    assert ckpt.filename == "every-3h-{epoch}-{step}"
+
+    # The timedelta must survive the YAML config that's saved with every run.
+    # Only the callbacks are rebuilt: the full DMI config doesn't round-trip yet,
+    # because its tuple date-range splits come back from YAML as lists.
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(dump_yaml(cfg))
+    reloaded = load_yaml_config(str(yaml_path))
+    (reloaded_ckpt,) = _time_based_checkpoints([fdl.build(cb) for cb in reloaded.trainer.callbacks])
+    assert reloaded_ckpt._train_time_interval == datetime.timedelta(hours=3)
