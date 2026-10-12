@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#17](https://github.com/mlcast-community/mlcast/pull/17) @franchg @leifdenby @noralinn
 - CI check that fails pull requests which don't update `CHANGELOG.md`; PRs that don't need an entry can opt out
   with the `no changelog` label. [#26](https://github.com/mlcast-community/mlcast/pull/26) @leifdenby
+- With `fiddler:use_mlflow_logger`, the training process's console output (logging, `print`s, warnings and the
+  traceback of a crash) is uploaded to the MLflow run as `logs/console.log`, refreshed every 60 s while training
+  runs (`console_upload_interval_seconds` to change it), so the log can be followed in the MLflow UI.
+  [#32](https://github.com/mlcast-community/mlcast/pull/32) @leifdenby
 
 ### Changed
 
