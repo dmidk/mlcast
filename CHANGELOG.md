@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lead), fixed calendar-year splits (2016–2023 train / 2024 val / 2025 test), and logging to DMI's MLflow server.
   [416eaa9](https://github.com/dmidk/mlcast/commit/416eaa97352fcd93500f6aef30fb9c57076dae96)
   [c431746](https://github.com/dmidk/mlcast/commit/c4317463b07219b859b1d004f199b1ec5cc4ff5f) @leifdenby
+- (DMI only) The DMI config saves a checkpoint every 3 h of training (Lightning's `ModelCheckpoint`
+  `train_time_interval`), kept alongside the best-loss checkpoints as `every-3h-epoch=…-step=….ckpt`.
+  [dmidk#3](https://github.com/dmidk/mlcast/pull/3) @leifdenby
 
 ### Changed
 
