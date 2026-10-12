@@ -1,5 +1,6 @@
 from pytorch_lightning.loggers import MLFlowLogger
 
+from mlcast.callbacks import LogConsoleToMLflowCallback
 from mlcast.config import set_variables, toggle_masking, training_experiment, use_mlflow_logger
 
 
@@ -50,3 +51,14 @@ def test_fiddler_use_mlflow_logger_defers_to_env_var(monkeypatch):
 
     assert cfg.trainer.logger.__fn_or_cls__ is MLFlowLogger
     assert not hasattr(cfg.trainer.logger, "tracking_uri") or cfg.trainer.logger.tracking_uri is None
+
+
+def test_fiddler_use_mlflow_logger_adds_console_log_callback(monkeypatch):
+    """The console-log upload callback is added, with the interval passed through."""
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
+    cfg = training_experiment.as_buildable()
+
+    use_mlflow_logger(cfg, console_upload_interval_seconds=15.0)
+
+    (console_cb,) = [cb for cb in cfg.trainer.callbacks if cb.__fn_or_cls__ is LogConsoleToMLflowCallback]
+    assert console_cb.upload_interval_seconds == 15.0

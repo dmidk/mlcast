@@ -18,7 +18,7 @@ import fiddle as fdl
 from loguru import logger
 from pytorch_lightning.loggers import MLFlowLogger
 
-from ..callbacks import LogSystemInfoCallback
+from ..callbacks import LogConsoleToMLflowCallback, LogSystemInfoCallback
 from ..data.source_data_datasets import SourceDataRandomSamplingDataset
 
 
@@ -114,13 +114,19 @@ def use_anon_s3_dataset(cfg: fdl.Buildable, zarr_path: str, endpoint_url: str) -
     }
 
 
-def use_mlflow_logger(cfg: fdl.Config, tracking_uri: str | None = None) -> None:
+def use_mlflow_logger(
+    cfg: fdl.Config,
+    tracking_uri: str | None = None,
+    console_upload_interval_seconds: float = 60.0,
+) -> None:
     """Fiddler to switch the trainer logger to MLflow.
 
     Replaces the default TensorBoardLogger with an MLFlowLogger, inheriting
     the experiment name from the existing logger config. The run name is
     left unset, deferring to the ``MLFLOW_RUN_NAME`` environment variable
-    (or MLflow's default).
+    (or MLflow's default). Also adds callbacks that log system info and
+    metrics, and that upload the console output to the run as
+    ``logs/console.log`` while training.
 
     Parameters
     ----------
@@ -131,6 +137,9 @@ def use_mlflow_logger(cfg: fdl.Config, tracking_uri: str | None = None) -> None:
         ``MLFLOW_TRACKING_URI`` environment variable (or MLflow's local
         ``./mlruns`` default) — and a missing env var still warns in that
         case, same as before.
+    console_upload_interval_seconds : float, optional
+        How often the captured console log is re-uploaded to MLflow while
+        training runs. Default 60.
     """
     if tracking_uri is None and not os.environ.get("MLFLOW_TRACKING_URI"):
         logger.warning(
@@ -142,3 +151,6 @@ def use_mlflow_logger(cfg: fdl.Config, tracking_uri: str | None = None) -> None:
     if tracking_uri is not None:
         cfg.trainer.logger.tracking_uri = tracking_uri
     cfg.trainer.callbacks.append(fdl.Config(LogSystemInfoCallback))
+    cfg.trainer.callbacks.append(
+        fdl.Config(LogConsoleToMLflowCallback, upload_interval_seconds=console_upload_interval_seconds)
+    )
