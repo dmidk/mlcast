@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (DMI only) `dmi_500m_10min_convgru_experiment` config (`src/mlcast/config/dmi.py`): ConvGRU training on DMI's
   500 m / 10 min radar composite with its precomputed sampling index, 6 input / 18 forecast steps (1 h in → 3 h
   lead), fixed calendar-year splits (2016–2023 train / 2024 val / 2025 test), and logging to DMI's MLflow server.
-  @leifdenby
+  [416eaa9](https://github.com/dmidk/mlcast/commit/416eaa97352fcd93500f6aef30fb9c57076dae96)
+  [c431746](https://github.com/dmidk/mlcast/commit/c4317463b07219b859b1d004f199b1ec5cc4ff5f) @leifdenby
 
 ### Changed
 
@@ -51,10 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`uv sync --extra cpu`, `pip install "mlcast[cpu]"`). After a one-time `uv sync --extra ...`, plain `uv run`
   no longer swaps the installed PyTorch build. [#30](https://github.com/mlcast-community/mlcast/pull/30) @leifdenby
 - (DMI only) `batch_size` raised from 16 to 32 in the DMI config; at 16 the A40 on `ohm.dmi.dk` used only ~43% of
-  its GPU memory. @leifdenby
+  its GPU memory. [c14e44d](https://github.com/dmidk/mlcast/commit/c14e44d504a69390f52d04d4a4d910ef2c78473c) @leifdenby
 
 ### Fixed
 
+- A failed image upload in `NowcastLightningModule` (e.g. the MLflow proxy rejecting a large PNG with a 413) is
+  now logged as a warning instead of killing the training run.
+  [#23](https://github.com/mlcast-community/mlcast/pull/23) @leifdenby
+- `ReflectivityScaling.normalize_reflectivity` now clips input to `[dbz_floor, dbz_ceiling]` before scaling, as
+  documented, so values outside that range (e.g. a no-echo sentinel below `dbz_floor`) map into
+  `[norm_min, norm_max]` instead of beyond it. [#25](https://github.com/mlcast-community/mlcast/pull/25) @leifdenby
 - `train_from_config` no longer lets a single bad MLflow hyperparameter kill a training run. `log_hyperparams`
   truncates values but not keys and has no error handling, so an overlong key, an immutable-param rewrite, or a
   transient server error raised straight out of training before it started; the MLflow path is now routed
