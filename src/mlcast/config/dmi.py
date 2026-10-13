@@ -15,7 +15,7 @@ from .base import Experiment, training_experiment
 from .fiddlers import set_variables, use_mlflow_logger
 
 ZARR_PATH = "/dmidata/projects/radar/products/composite/zarrComposite/tmp_folder/DMI_500m_10min_v012.zarr"
-INDEX_PATH = "/nwp/lcd/mlcast/sampling_index_2016-02-29-2025-12-31_24x256x256_3x16x16_10000.parquet"
+INDEX_PATH = "/dmidata/projects/cloudphysics/mlcast/sampling_index_2016-02-29-2025-12-31_24x256x256_3x16x16_10000.parquet"
 MLFLOW_TRACKING_URI = "https://mlflow.dmidev.org/"
 CHECKPOINT_EVERY_HOURS = 3
 
