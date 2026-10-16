@@ -8,13 +8,17 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import psutil
 import pytorch_lightning as pl
 import torch
 from loguru import logger as log
 from mlflow.system_metrics.system_metrics_monitor import SystemMetricsMonitor
+from pytorch_lightning.callbacks import Timer
 from pytorch_lightning.loggers import MLFlowLogger
 
 
@@ -91,6 +95,84 @@ class LogSystemInfoCallback(pl.Callback):
 
     def on_exception(self, trainer: pl.Trainer, pl_module: pl.LightningModule, exception: BaseException) -> None:
         self._stop_monitor()
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds as ``H:MM:SS`` (or ``D days, H:MM:SS``), dropping fractions."""
+    return str(timedelta(seconds=round(seconds)))
+
+
+class LogTrainingProgressCallback(pl.Callback):
+    """Log a one-line training progress summary at a fixed wall-clock interval.
+
+    A progress bar redraws one line in place and never ends it until the
+    epoch finishes, so it is invisible in line-based logs such as the
+    ``logs/console.log`` uploaded by `LogConsoleToMLflowCallback` (an epoch
+    on a large dataset can run for longer than the whole job). This logs a
+    complete line instead, at most once per `log_interval_seconds`: global
+    step, epoch and batch, the latest ``train_loss_step``, steps/s and
+    samples/s since the previous line, elapsed time, and the time remaining
+    when the trainer has a ``max_time``. Only the global-zero process logs.
+
+    Parameters
+    ----------
+    log_interval_seconds : float
+        Minimum wall-clock seconds between progress lines.
+    """
+
+    def __init__(self, log_interval_seconds: float = 60.0) -> None:
+        self.log_interval_seconds = log_interval_seconds
+        self._start_time: float | None = None
+        self._last_time: float | None = None
+        self._last_step = 0
+        self._samples_since_last = 0
+
+    def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._start_time = self._last_time = time.monotonic()
+        self._last_step = trainer.global_step
+        self._samples_since_last = 0
+
+    def on_train_batch_end(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule, outputs: Any, batch: Any, batch_idx: int
+    ) -> None:
+        if not trainer.is_global_zero or self._last_time is None or self._start_time is None:
+            return
+        self._samples_since_last += _batch_size(batch)
+        now = time.monotonic()
+        interval = now - self._last_time
+        if interval < self.log_interval_seconds:
+            return
+
+        step = trainer.global_step
+        steps_per_s = (step - self._last_step) / interval
+        samples_per_s = self._samples_since_last / interval
+        total_batches = trainer.num_training_batches
+        batches = f"{batch_idx + 1}/{total_batches}" if total_batches != float("inf") else f"{batch_idx + 1}"
+        loss = trainer.callback_metrics.get("train_loss_step")
+        parts = [
+            f"step {step}",
+            f"epoch {trainer.current_epoch} batch {batches}",
+            f"train_loss_step {float(loss):.4g}" if loss is not None else "train_loss_step n/a",
+            f"{steps_per_s:.3g} steps/s",
+            f"{samples_per_s:.3g} samples/s",
+            f"elapsed {_format_duration(now - self._start_time)}",
+        ]
+        timer = next((cb for cb in trainer.callbacks if isinstance(cb, Timer)), None)
+        remaining = timer.time_remaining() if timer is not None else None
+        if remaining is not None:
+            parts.append(f"remaining {_format_duration(max(remaining, 0.0))}")
+        log.info("Training progress: " + ", ".join(parts))
+
+        self._last_time = now
+        self._last_step = step
+        self._samples_since_last = 0
+
+
+def _batch_size(batch: Any) -> int:
+    """Return the number of samples in a batch dict (``"input"`` tensor), or 0 if unknown."""
+    if isinstance(batch, dict) and isinstance(batch.get("input"), torch.Tensor):
+        return batch["input"].shape[0]
+    return 0
 
 
 def _write_all(fd: int, data: bytes) -> None:
