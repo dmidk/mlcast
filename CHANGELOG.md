@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elapsed and remaining time) every 60 s (`progress_log_interval_seconds`), so progress shows in that log, and
   switches the progress bar to TQDM, because Lightning's default Rich bar is hidden once the console is captured.
   [#32](https://github.com/mlcast-community/mlcast/pull/32) (draft)
-  Commits: [25b35f2](https://github.com/dmidk/mlcast/commit/25b35f269834eb1e7a2d884fe9d36a350e6fa659) @leifdenby
+  Commits: [25b35f2](https://github.com/dmidk/mlcast/commit/25b35f269834eb1e7a2d884fe9d36a350e6fa659)
+  [737d24e](https://github.com/dmidk/mlcast/commit/737d24e635239247e12d654a0a62d8a16a6dee0a) @leifdenby
 - (DMI only) `dmi_500m_10min_convgru_experiment` config (`src/mlcast/config/dmi.py`): ConvGRU training on DMI's
   500 m / 10 min radar composite with its precomputed sampling index, 6 input / 18 forecast steps (1 h in → 3 h
   lead), fixed calendar-year splits (2016–2023 train / 2024 val / 2025 test), and logging to DMI's MLflow server.
