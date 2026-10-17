@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - (DMI only) The DMI config saves a checkpoint every 3 h of training (Lightning's `ModelCheckpoint`
   `train_time_interval`), kept alongside the best-loss checkpoints as `every-3h-epoch=…-step=….ckpt`.
   [dmidk#3](https://github.com/dmidk/mlcast/pull/3) @leifdenby
+- (DMI only) The DMI config's training split starts 2019-07-13 (was 2016-01-01) because of missing earlier data,
+  and its sampling index moved to `/dmidata/projects/cloudphysics/mlcast/`.
+  [214dbd5](https://github.com/dmidk/mlcast/commit/214dbd5b8ee075be2f21d26ffb61dc8cb30ee286) @arjj8
+  [90b7899](https://github.com/dmidk/mlcast/commit/90b7899faa8276aaea89edbee6926f162f44caf3) @leifdenby
 
 ### Changed
 
