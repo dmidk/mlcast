@@ -15,7 +15,9 @@ from .base import Experiment, training_experiment
 from .fiddlers import set_variables, use_mlflow_logger
 
 ZARR_PATH = "/dmidata/projects/radar/products/composite/zarrComposite/tmp_folder/DMI_500m_10min_v012.zarr"
-INDEX_PATH = "/dmidata/projects/cloudphysics/mlcast/sampling_index_2016-02-29-2025-12-31_24x256x256_3x16x16_10000.parquet"
+INDEX_PATH = (
+    "/dmidata/projects/cloudphysics/mlcast/sampling_index_2016-02-29-2025-12-31_24x256x256_3x16x16_10000.parquet"
+)
 MLFLOW_TRACKING_URI = "https://mlflow.dmidev.org/"
 CHECKPOINT_EVERY_HOURS = 3
 
@@ -36,8 +38,9 @@ def dmi_500m_10min_convgru_experiment() -> fdl.Config[Experiment]:
       sync;
     - `batch_size` to 32 (default 16 left the A40 on ohm.dmi.dk at ~43%
       memory utilization);
-    - `data.splits` to fixed calendar-year ranges (2016-2023 train / 2024
-      val / 2025 test) instead of the default ratio split, so the 2025
+    - `data.splits` to fixed date ranges (2019-07-13 to 2023 train, since
+      earlier data is missing / 2024 val / 2025 test) instead of the
+      default ratio split, so the 2025
       test season can never be contaminated by a ratio boundary landing
       mid-year;
     - an extra checkpoint callback saving a checkpoint every
