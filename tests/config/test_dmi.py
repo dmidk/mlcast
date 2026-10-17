@@ -22,7 +22,7 @@ def test_dmi_500m_10min_convgru_experiment_config():
 
     assert cfg.data.splits == {
         "time": {
-            "train": ("2016-01-01", "2023-12-31"),
+            "train": ("2019-07-13", "2023-12-31"),
             "val": ("2024-01-01", "2024-12-31"),
             "test": ("2025-01-01", "2025-12-31"),
         }
