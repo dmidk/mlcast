@@ -16,9 +16,10 @@ import os
 
 import fiddle as fdl
 from loguru import logger
+from pytorch_lightning.callbacks import ProgressBar, TQDMProgressBar
 from pytorch_lightning.loggers import MLFlowLogger
 
-from ..callbacks import LogConsoleToMLflowCallback, LogSystemInfoCallback
+from ..callbacks import LogConsoleToMLflowCallback, LogSystemInfoCallback, LogTrainingProgressCallback
 from ..data.source_data_datasets import SourceDataRandomSamplingDataset
 
 
@@ -118,6 +119,7 @@ def use_mlflow_logger(
     cfg: fdl.Config,
     tracking_uri: str | None = None,
     console_upload_interval_seconds: float = 60.0,
+    progress_log_interval_seconds: float = 60.0,
 ) -> None:
     """Fiddler to switch the trainer logger to MLflow.
 
@@ -125,8 +127,11 @@ def use_mlflow_logger(
     the experiment name from the existing logger config. The run name is
     left unset, deferring to the ``MLFLOW_RUN_NAME`` environment variable
     (or MLflow's default). Also adds callbacks that log system info and
-    metrics, and that upload the console output to the run as
-    ``logs/console.log`` while training.
+    metrics, that upload the console output to the run as
+    ``logs/console.log`` while training, and that log a progress line at a
+    fixed interval so progress shows in that log. Unless a progress bar is
+    already configured, the progress bar is set to TQDM, because the console
+    capture hides Lightning's default Rich bar.
 
     Parameters
     ----------
@@ -140,6 +145,9 @@ def use_mlflow_logger(
     console_upload_interval_seconds : float, optional
         How often the captured console log is re-uploaded to MLflow while
         training runs. Default 60.
+    progress_log_interval_seconds : float, optional
+        Minimum seconds between the progress lines logged during training.
+        Default 60.
     """
     if tracking_uri is None and not os.environ.get("MLFLOW_TRACKING_URI"):
         logger.warning(
@@ -154,3 +162,18 @@ def use_mlflow_logger(
     cfg.trainer.callbacks.append(
         fdl.Config(LogConsoleToMLflowCallback, upload_interval_seconds=console_upload_interval_seconds)
     )
+    cfg.trainer.callbacks.append(
+        fdl.Config(LogTrainingProgressCallback, log_interval_seconds=progress_log_interval_seconds)
+    )
+    # The console capture points fds 1/2 at pipes, so Lightning's default
+    # RichProgressBar sees no terminal and hides its live display. TQDM redraws
+    # with "\r" regardless, which passes through to the terminal (and which the
+    # capture collapses in the log file). Lightning raises on two progress
+    # bars, so leave an explicitly configured one alone. Callback entries are
+    # `fdl.Config` nodes here, hence the check on `__fn_or_cls__`.
+    has_progress_bar = any(
+        isinstance(getattr(cb, "__fn_or_cls__", None), type) and issubclass(cb.__fn_or_cls__, ProgressBar)
+        for cb in cfg.trainer.callbacks
+    )
+    if not has_progress_bar:
+        cfg.trainer.callbacks.append(fdl.Config(TQDMProgressBar))
