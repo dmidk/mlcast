@@ -169,16 +169,54 @@ def test_resolve_without_any_checkpoint_raises(tmp_path: Path) -> None:
         resolve_resume_source(RUN_ID, download_dir=tmp_path, local_root=tmp_path, client=_fake_client(), repo=repo)
 
 
-def test_resume_training_fiddler(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_training_fiddler_starts_a_linked_run(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
     cfg = training_experiment.as_buildable()
     use_mlflow_logger(cfg)
 
-    resume_training(cfg, ckpt_path="/ckpts/last.ckpt", mlflow_run_id=RUN_ID)
+    resume_training(
+        cfg, ckpt_path="/ckpts/epoch=0-step=83299.ckpt", mlflow_run_id=RUN_ID, run_name="sow-from-step83299"
+    )
 
-    assert cfg.ckpt_path == "/ckpts/last.ckpt"
+    assert cfg.ckpt_path == "/ckpts/epoch=0-step=83299.ckpt"
+    assert cfg.trainer.logger.run_id is None
+    assert cfg.trainer.logger.run_name == "sow-from-step83299"
+    assert cfg.trainer.logger.tags == {
+        "mlflow.parentRunId": RUN_ID,
+        "mlcast.resumed_from_run": RUN_ID,
+        "mlcast.resumed_from_checkpoint": "epoch=0-step=83299.ckpt",
+    }
+    assert cfg.trainer.logger.log_model == "all"
+
+
+def test_resume_training_fiddler_drops_ids_inherited_from_a_resumed_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A config saved by an earlier resume carries that run's id, name and links."""
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
+    cfg = training_experiment.as_buildable()
+    use_mlflow_logger(cfg)
+    cfg.trainer.logger.run_id = "a" * 32
+    cfg.trainer.logger.run_name = "old-from-step10"
+    cfg.trainer.logger.tags = {"mlflow.parentRunId": "b" * 32, "team": "dmi"}
+
+    resume_training(cfg, ckpt_path="/ckpts/x-step=20.ckpt", mlflow_run_id=RUN_ID)
+
+    assert cfg.trainer.logger.run_id is None
+    assert cfg.trainer.logger.run_name is None
+    assert cfg.trainer.logger.tags["mlflow.parentRunId"] == RUN_ID
+    assert cfg.trainer.logger.tags["team"] == "dmi"
+
+
+def test_resume_training_fiddler_inplace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
+    cfg = training_experiment.as_buildable()
+    use_mlflow_logger(cfg)
+
+    resume_training(cfg, ckpt_path="/ckpts/last.ckpt", mlflow_run_id=RUN_ID, inplace=True, run_name="ignored")
+
     assert cfg.trainer.logger.run_id == RUN_ID
     assert cfg.trainer.logger.log_model == "all"
+    assert cfg.trainer.logger.tags is None
+    assert cfg.trainer.logger.run_name is None
 
 
 def test_resume_training_fiddler_without_mlflow_logger() -> None:
@@ -226,12 +264,36 @@ def test_experiment_ckpt_path_settable_in_config() -> None:
     ],
 )
 def test_extract_mlflow_run_ref(argv: list[str]) -> None:
-    run_ref, remaining = _extract_mlflow_run_ref(argv)
+    run_ref, inplace, remaining = _extract_mlflow_run_ref(argv)
 
     assert run_ref == RUN_ID
+    assert inplace is False
     assert remaining == ["--config", "set:trainer.max_time='01:00:00:00'"]
+
+
+@pytest.mark.parametrize("argv", [["--config", f"mlflow-inplace:{RUN_ID}"], [f"--config=mlflow-inplace:{RUN_ID}"]])
+def test_extract_mlflow_run_ref_inplace(argv: list[str]) -> None:
+    assert _extract_mlflow_run_ref(argv) == (RUN_ID, True, [])
 
 
 def test_extract_mlflow_run_ref_absent() -> None:
     argv = ["--config", "config:dmi_500m_10min_convgru_experiment"]
-    assert _extract_mlflow_run_ref(argv) == (None, argv)
+    assert _extract_mlflow_run_ref(argv) == (None, False, argv)
+
+
+def test_resolve_prefers_config_yaml_and_reports_run_name_and_step(tmp_path: Path) -> None:
+    client = _fake_client()
+    client.get_run.return_value.info.run_name = "intrigued-sow-455"
+    repo = _fake_repo(
+        {
+            "": [("config", True), ("epoch=0-step=83299", True)],
+            "config": [("config/tmpm6d5s5g9.yaml", False), ("config/config.yaml", False)],
+            "epoch=0-step=83299": [("epoch=0-step=83299/epoch=0-step=83299.ckpt", False)],
+        }
+    )
+
+    source = resolve_resume_source(RUN_ID, download_dir=tmp_path, client=client, repo=repo)
+
+    assert source.config_path.name == "config.yaml"
+    assert source.run_name == "intrigued-sow-455"
+    assert source.step == 83299

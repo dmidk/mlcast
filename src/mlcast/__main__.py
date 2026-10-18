@@ -157,7 +157,11 @@ def _build_help_text(cfg: fdl.Buildable) -> Text:
     t.append("\n  # Resume from or reproduce a previously saved YAML config:\n", style="dim")
     t.append("  mlcast train ", style="bold")
     t.append("--config /path/to/config.yaml\n", style="cyan")
-    t.append("\n  # Resume an MLflow run (its config + latest checkpoint), e.g. with a longer max_time:\n", style="dim")
+    t.append(
+        "\n  # Continue an MLflow run (its config + latest checkpoint) as a new linked run, e.g. with a\n"
+        "  # longer max_time (max_time is the total); mlflow-inplace:<run> logs into the original run:\n",
+        style="dim",
+    )
     t.append("  mlcast train ", style="bold")
     t.append("--config mlflow:<run id or URL> --config 'set:trainer.max_time=\"03:00:00:00\"'\n", style="cyan")
     t.append("\n  # Load a YAML config and apply additional overrides on top:\n", style="dim")
@@ -303,14 +307,17 @@ def _extract_yaml_config_path(remaining: list[str]) -> tuple[str | None, list[st
     return None, remaining
 
 
+# `mlflow:` continues a run as a new, linked MLflow run; `mlflow-inplace:`
+# keeps logging into the original run.
 MLFLOW_CONFIG_PREFIX = "mlflow:"
+MLFLOW_INPLACE_CONFIG_PREFIX = "mlflow-inplace:"
 RESUME_DOWNLOAD_DIR = Path(".mlcast-resume")
 
 
-def _extract_mlflow_run_ref(remaining: list[str]) -> tuple[str | None, list[str]]:
-    """Scan ``remaining`` for ``--config mlflow:<run>`` and remove it.
+def _extract_mlflow_run_ref(remaining: list[str]) -> tuple[str | None, bool, list[str]]:
+    """Scan ``remaining`` for ``--config mlflow:<run>`` / ``mlflow-inplace:<run>`` and remove it.
 
-    Accepts both ``--config mlflow:<run>`` and ``--config=mlflow:<run>``.
+    Accepts both the ``--config <value>`` and ``--config=<value>`` forms.
 
     Parameters
     ----------
@@ -320,27 +327,33 @@ def _extract_mlflow_run_ref(remaining: list[str]) -> tuple[str | None, list[str]
     Returns
     -------
     run_ref : str or None
-        The run reference after the ``mlflow:`` prefix, if found.
+        The run reference after the prefix, if found.
+    inplace : bool
+        Whether the ``mlflow-inplace:`` prefix was used.
     remaining : list of str
         The flag list with the matching ``--config`` tokens removed.
     """
     remaining = list(remaining)
-    for i, arg in enumerate(remaining):
-        if arg == "--config" and i + 1 < len(remaining) and remaining[i + 1].startswith(MLFLOW_CONFIG_PREFIX):
-            return remaining[i + 1][len(MLFLOW_CONFIG_PREFIX) :], remaining[:i] + remaining[i + 2 :]
-        if arg.startswith("--config=" + MLFLOW_CONFIG_PREFIX):
-            return arg[len("--config=" + MLFLOW_CONFIG_PREFIX) :], remaining[:i] + remaining[i + 1 :]
-    return None, remaining
+    for prefix, inplace in ((MLFLOW_INPLACE_CONFIG_PREFIX, True), (MLFLOW_CONFIG_PREFIX, False)):
+        for i, arg in enumerate(remaining):
+            if arg == "--config" and i + 1 < len(remaining) and remaining[i + 1].startswith(prefix):
+                return remaining[i + 1][len(prefix) :], inplace, remaining[:i] + remaining[i + 2 :]
+            if arg.startswith("--config=" + prefix):
+                return arg[len("--config=" + prefix) :], inplace, remaining[:i] + remaining[i + 1 :]
+    return None, False, remaining
 
 
-def _resume_from_mlflow_run(run_ref: str, remaining: list[str]) -> list[str]:
+def _resume_from_mlflow_run(run_ref: str, remaining: list[str], inplace: bool = False) -> list[str]:
     """Seed the config from an MLflow run and resume from its latest checkpoint.
 
     Downloads the run's config YAML and latest checkpoint (see
     `mlcast.config.mlflow_resume`), seeds the Fiddle flag with the YAML, and
     puts a ``resume_training`` fiddler first in ``remaining``, so the user's
     own ``set:``/``fiddler:`` overrides are applied after it and can change
-    anything (e.g. a longer ``trainer.max_time``).
+    anything (e.g. a longer ``trainer.max_time``). By default the
+    continuation is a new MLflow run linked to the original and named
+    ``<original name>-from-step<N>``; with ``inplace`` it logs into the
+    original run.
 
     Parameters
     ----------
@@ -348,6 +361,8 @@ def _resume_from_mlflow_run(run_ref: str, remaining: list[str]) -> list[str]:
         Run reference (id, ``runs:/<id>`` or UI URL).
     remaining : list of str
         The remaining CLI tokens.
+    inplace : bool, optional
+        Continue logging into the original run.
 
     Returns
     -------
@@ -358,7 +373,12 @@ def _resume_from_mlflow_run(run_ref: str, remaining: list[str]) -> list[str]:
 
     source = resolve_resume_source(run_ref, download_dir=RESUME_DOWNLOAD_DIR)
     _seed_fiddle_flag_from_yaml(str(source.config_path))
-    fiddler = f"fiddler:resume_training(ckpt_path='{source.ckpt_path}', mlflow_run_id='{source.run_id}')"
+    run_name = f"{source.run_name}-from-step{source.step}" if source.run_name and not inplace else None
+    # repr() quotes the values as Python literals, which is how Fiddle parses fiddler arguments.
+    fiddler = (
+        f"fiddler:resume_training(ckpt_path={str(source.ckpt_path)!r}, mlflow_run_id={source.run_id!r}, "
+        f"inplace={inplace!r}, run_name={run_name!r})"
+    )
     return [f"--config={fiddler}"] + remaining
 
 
@@ -512,8 +532,9 @@ def cli() -> None:
 
         # Case 1b: resume an MLflow run, e.g. --config mlflow:<run id or URL>
         #   Uses the run's own config YAML as the base and resumes from its
-        #   latest checkpoint; set:/fiddler: flags still apply on top
-        run_ref, remaining = _extract_mlflow_run_ref(remaining)
+        #   latest checkpoint as a new linked run (mlflow-inplace:<run> logs
+        #   into the original run); set:/fiddler: flags still apply on top
+        run_ref, inplace, remaining = _extract_mlflow_run_ref(remaining)
         if run_ref is not None and yaml_path is not None:
             print("Error: pass either a YAML config or --config mlflow:<run>, not both.", file=sys.stderr)
             sys.exit(1)
@@ -535,7 +556,7 @@ def cli() -> None:
         if yaml_path is not None:
             _seed_fiddle_flag_from_yaml(yaml_path)
         if run_ref is not None:
-            remaining = _resume_from_mlflow_run(run_ref, remaining)
+            remaining = _resume_from_mlflow_run(run_ref, remaining, inplace=inplace)
 
         app.run(train_main, argv=[sys.argv[0]] + remaining)
     elif args.command in ("build-sampling-index", "validate-sampling-index"):
