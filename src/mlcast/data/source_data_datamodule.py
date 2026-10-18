@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 from mlcast.data.source_data.sampling import CandidateSelector
 from mlcast.data.splits import (
     compute_split_ranges_from_splitting_ratios,
+    normalize_splits,
     splitting_uses_fractions,
     splitting_uses_tuple_ranges,
     validate_splits,
@@ -55,7 +56,8 @@ class SourceDataDataModule(pl.LightningDataModule):
     ) -> None:
         super().__init__()
         self.dataset_factory = dataset_factory
-        self.splits = splits
+        # A config reloaded from YAML has lists where tuple ranges were.
+        self.splits = normalize_splits(splits)
         self.train_selector = train_selector
         self.eval_selector = eval_selector
         self.dataloader_kwargs = dataloader_kwargs

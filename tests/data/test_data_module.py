@@ -7,7 +7,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from mlcast.data.source_data.sampling import UniformSelector
 from mlcast.data.source_data_datamodule import SourceDataDataModule
-from mlcast.data.splits import splitting_uses_fractions, splitting_uses_tuple_ranges, validate_splits
+from mlcast.data.splits import (
+    normalize_splits,
+    splitting_uses_fractions,
+    splitting_uses_tuple_ranges,
+    validate_splits,
+)
 
 
 class MockDataset(Dataset):
@@ -94,6 +99,23 @@ def test_validate_splits_mixed_mode() -> None:
 def test_validate_splits_datetime_missing_test() -> None:
     with pytest.raises(ValueError, match="must contain 'test'"):
         validate_splits({"time": {"train": ("2016-01-01", "2021-12-31"), "val": ("2022-01-01", "2023-12-31")}})
+
+
+def test_normalize_splits_turns_yaml_lists_into_tuples() -> None:
+    """Splits reloaded from YAML have lists where (start, end) tuples were."""
+    from_yaml = {"time": {"train": ["2019-07-13", "2023-12-31"], "val": ["2024-01-01", "2024-12-31"], "test": None}}
+
+    normalized = normalize_splits(from_yaml)
+
+    assert normalized == {
+        "time": {"train": ("2019-07-13", "2023-12-31"), "val": ("2024-01-01", "2024-12-31"), "test": None}
+    }
+    validate_splits(normalized)
+    # Ratio-mode values and the input are left alone.
+    assert normalize_splits({"time": {"train": 0.7, "val": 0.2, "test": 0.1}}) == {
+        "time": {"train": 0.7, "val": 0.2, "test": 0.1}
+    }
+    assert from_yaml["time"]["train"] == ["2019-07-13", "2023-12-31"]
 
 
 def test_validate_splits_unknown_coord() -> None:

@@ -51,10 +51,27 @@ def test_dmi_config_checkpoints_every_3_hours(tmp_path: Path) -> None:
     assert ckpt.filename == "every-3h-{epoch}-{step}"
 
     # The timedelta must survive the YAML config that's saved with every run.
-    # Only the callbacks are rebuilt: the full DMI config doesn't round-trip yet,
-    # because its tuple date-range splits come back from YAML as lists.
     yaml_path = tmp_path / "config.yaml"
     yaml_path.write_text(dump_yaml(cfg))
     reloaded = load_yaml_config(str(yaml_path))
     (reloaded_ckpt,) = _time_based_checkpoints([fdl.build(cb) for cb in reloaded.trainer.callbacks])
     assert reloaded_ckpt._train_time_interval == datetime.timedelta(hours=3)
+
+
+def test_dmi_config_builds_after_yaml_round_trip(tmp_path: Path) -> None:
+    """The saved config.yaml (what `--config config.yaml` and `--config mlflow:<run>` load)
+    builds again. YAML has no tuples, so the (start, end) date-range splits come back as
+    lists; the data module turns them back into tuples."""
+    cfg = dmi_500m_10min_convgru_experiment()
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(dump_yaml(cfg))
+
+    experiment = fdl.build(load_yaml_config(str(yaml_path)))
+
+    assert experiment.data.splits == {
+        "time": {
+            "train": ("2019-07-13", "2023-12-31"),
+            "val": ("2024-01-01", "2024-12-31"),
+            "test": ("2025-01-01", "2025-12-31"),
+        }
+    }
