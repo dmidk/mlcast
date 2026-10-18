@@ -44,6 +44,12 @@ class ResumeSource:
     tracking_uri: str | None
     config_path: Path
     ckpt_path: Path
+    run_name: str | None = None
+
+    @property
+    def step(self) -> int:
+        """Training step of the checkpoint, from its ``step=N`` filename part (-1 if absent)."""
+        return _step(self.ckpt_path.name)
 
 
 def parse_run_ref(ref: str) -> tuple[str | None, str]:
@@ -144,9 +150,13 @@ def resolve_resume_source(
     configs = [f.path for f in repo.list_artifacts("config") if f.path.endswith((".yaml", ".yml"))]
     if not configs:
         raise FileNotFoundError(f"MLflow run {run_id} has no config YAML under config/")
+    # Runs from before the config was uploaded under a fixed name have a
+    # temp-named YAML; after an in-place resume they also have config.yaml,
+    # which is the newer one.
+    config_artifact = "config/config.yaml" if "config/config.yaml" in configs else configs[0]
     if len(configs) > 1:
-        logger.warning(f"MLflow run {run_id} has several config files {configs}; using {configs[0]}")
-    config_path = Path(repo.download_artifacts(configs[0], str(dest)))
+        logger.warning(f"MLflow run {run_id} has several config files {configs}; using {config_artifact}")
+    config_path = Path(repo.download_artifacts(config_artifact, str(dest)))
 
     remote = _remote_checkpoints(repo)
     if remote:
@@ -169,4 +179,10 @@ def resolve_resume_source(
         logger.info(f"No checkpoints logged to MLflow run {run_id}; using local checkpoint {ckpt_path}")
 
     logger.info(f"Resuming MLflow run {run_id} from {ckpt_path.name} (step {_step(ckpt_path.name)})")
-    return ResumeSource(run_id=run_id, tracking_uri=tracking_uri, config_path=config_path, ckpt_path=ckpt_path)
+    return ResumeSource(
+        run_id=run_id,
+        tracking_uri=tracking_uri,
+        config_path=config_path,
+        ckpt_path=ckpt_path,
+        run_name=getattr(run.info, "run_name", None),
+    )

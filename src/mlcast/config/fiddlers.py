@@ -182,16 +182,28 @@ def use_mlflow_logger(
         cfg.trainer.callbacks.append(fdl.Config(TQDMProgressBar))
 
 
-def resume_training(cfg: fdl.Config, ckpt_path: str, mlflow_run_id: str | None = None) -> None:
+def resume_training(
+    cfg: fdl.Config,
+    ckpt_path: str,
+    mlflow_run_id: str | None = None,
+    inplace: bool = False,
+    run_name: str | None = None,
+) -> None:
     """Fiddler to resume training from a checkpoint.
 
     Sets ``cfg.ckpt_path`` so that ``Trainer.fit`` restores the full
     training state (weights, optimizer, LR scheduler, step counter and the
     ``max_time`` timer, so ``max_time`` is the total budget, not the extra
-    time). With ``mlflow_run_id``, the MLflow logger logs into that existing
-    run instead of starting a new one, so the metric curves continue, and
-    checkpoint upload is switched on. ``mlcast train --config mlflow:<run>``
-    applies this fiddler for you.
+    time). ``mlcast train --config mlflow:<run>`` applies this fiddler for you.
+
+    With ``mlflow_run_id`` (the run being continued), the continuation is
+    logged as a **new MLflow run linked to it**: tagged
+    ``mlflow.parentRunId`` (so the UI nests it under the original),
+    ``mlcast.resumed_from_run`` and ``mlcast.resumed_from_checkpoint``. A new
+    run can log its own config and status, which MLflow wouldn't allow in
+    the original run (params are immutable). Step numbers continue from the
+    checkpoint, so the runs' curves line up. With ``inplace=True`` the
+    original run is continued instead. Either way checkpoint upload is on.
 
     Parameters
     ----------
@@ -200,12 +212,29 @@ def resume_training(cfg: fdl.Config, ckpt_path: str, mlflow_run_id: str | None =
     ckpt_path : str
         Local path of the checkpoint to resume from.
     mlflow_run_id : str, optional
-        MLflow run to continue logging into. Requires the trainer logger to
-        be an ``MLFlowLogger``.
+        MLflow run being continued. Requires the trainer logger to be an
+        ``MLFlowLogger``.
+    inplace : bool, optional
+        Log into ``mlflow_run_id`` itself instead of a new linked run.
+    run_name : str, optional
+        Name for the new run (ignored with ``inplace``).
     """
     cfg.ckpt_path = ckpt_path
-    if mlflow_run_id is not None:
-        if getattr(cfg.trainer.logger, "__fn_or_cls__", None) is not MLFlowLogger:
-            raise ValueError("resume_training(mlflow_run_id=...) needs an MLFlowLogger; apply use_mlflow_logger first")
+    if mlflow_run_id is None:
+        return
+    if getattr(cfg.trainer.logger, "__fn_or_cls__", None) is not MLFlowLogger:
+        raise ValueError("resume_training(mlflow_run_id=...) needs an MLFlowLogger; apply use_mlflow_logger first")
+    cfg.trainer.logger.log_model = "all"
+    if inplace:
         cfg.trainer.logger.run_id = mlflow_run_id
-        cfg.trainer.logger.log_model = "all"
+        return
+    # A config saved by an earlier (in-place or linked) resume may carry that
+    # run's id, name and links; a new run must not inherit them.
+    cfg.trainer.logger.run_id = None
+    cfg.trainer.logger.run_name = run_name
+    cfg.trainer.logger.tags = {
+        **(cfg.trainer.logger.tags or {}),
+        "mlflow.parentRunId": mlflow_run_id,
+        "mlcast.resumed_from_run": mlflow_run_id,
+        "mlcast.resumed_from_checkpoint": os.path.basename(ckpt_path),
+    }
