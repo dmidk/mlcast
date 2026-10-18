@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A saved `config.yaml` with `(start, end)` date-range splits (e.g. the DMI config) can be built again: YAML has no
+  tuples, so the ranges came back as lists and `validate_splits` rejected them, which broke `--config config.yaml`
+  and `--config mlflow:<run>`. `SourceDataDataModule` now turns two-element lists back into tuples
+  (`normalize_splits`). @leifdenby
 - `mlcast train --config mlflow:<run>` failed with a 404 against tracking servers older than MLflow 3 (e.g.
   mlflow.dmidev.org): `MlflowClient.list_artifacts` in the MLflow 3 client also queries the logged-models endpoint.
   Artifacts are now listed and downloaded through the run's artifact repository instead. @leifdenby

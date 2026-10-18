@@ -61,6 +61,34 @@ def splitting_uses_tuple_ranges(coord_splits: dict[str, Any]) -> bool:
     return all(split_val is None or isinstance(split_val, tuple) for split_val in coord_splits.values())
 
 
+def normalize_splits(splits: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return ``splits`` with two-element lists turned into ``(start, end)`` tuples.
+
+    YAML has no tuple type, so a tuple-range split written out by the config
+    serialisation (``config.yaml`` in a run's log dir or MLflow artifacts)
+    comes back as a list. Converting it here lets a saved config be loaded
+    and built again, e.g. ``mlcast train --config config.yaml`` or
+    ``--config mlflow:<run>``. Other values are returned unchanged.
+
+    Parameters
+    ----------
+    splits : dict
+        Nested split configuration, ``{coord: {split_name: value}}``.
+
+    Returns
+    -------
+    dict
+        A new dict with the same structure.
+    """
+    return {
+        coord: {
+            name: tuple(value) if isinstance(value, list) and len(value) == 2 else value
+            for name, value in coord_splits.items()
+        }
+        for coord, coord_splits in splits.items()
+    }
+
+
 def validate_splits(splits: dict[str, dict[str, Any]]) -> None:
     """Validate the nested ``splits`` configuration for the data module.
 
