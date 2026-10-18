@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from loguru import logger
+from mlflow.store.artifact.artifact_repo import ArtifactRepository
+from mlflow.store.artifact.artifact_repository_registry import get_artifact_repository
 from mlflow.tracking import MlflowClient
 
 # Directories that `train_from_config` and the callbacks log to; never checkpoints.
@@ -81,13 +83,13 @@ def _step(name: str) -> int:
     return int(match.group(1)) if match else -1
 
 
-def _remote_checkpoints(client: MlflowClient, run_id: str) -> list[str]:
+def _remote_checkpoints(repo: ArtifactRepository) -> list[str]:
     """Return artifact paths of the ``.ckpt`` files logged to the run."""
     paths = []
-    for entry in client.list_artifacts(run_id):
+    for entry in repo.list_artifacts():
         if not entry.is_dir or entry.path in _NON_CHECKPOINT_DIRS:
             continue
-        paths += [f.path for f in client.list_artifacts(run_id, entry.path) if f.path.endswith(".ckpt")]
+        paths += [f.path for f in repo.list_artifacts(entry.path) if f.path.endswith(".ckpt")]
     return paths
 
 
@@ -96,7 +98,11 @@ def _local_checkpoints(root: Path, experiment_id: str, run_id: str) -> list[Path
 
 
 def resolve_resume_source(
-    ref: str, download_dir: Path, local_root: Path | None = None, client: MlflowClient | None = None
+    ref: str,
+    download_dir: Path,
+    local_root: Path | None = None,
+    client: MlflowClient | None = None,
+    repo: ArtifactRepository | None = None,
 ) -> ResumeSource:
     """Download the config and pick the latest checkpoint of an MLflow run.
 
@@ -112,6 +118,9 @@ def resolve_resume_source(
         ``default_root_dir``); defaults to the current directory.
     client : MlflowClient, optional
         Client to use (for tests); built from the reference otherwise.
+    repo : ArtifactRepository, optional
+        The run's artifact repository (for tests); built from the run's
+        ``artifact_uri`` otherwise.
 
     Returns
     -------
@@ -119,20 +128,27 @@ def resolve_resume_source(
         Run id, tracking URI, and local paths of the config and checkpoint.
     """
     tracking_uri, run_id = parse_run_ref(ref)
+    effective_uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI")
     if client is None:
-        client = MlflowClient(tracking_uri=tracking_uri or os.environ.get("MLFLOW_TRACKING_URI"))
+        client = MlflowClient(tracking_uri=effective_uri)
     run = client.get_run(run_id)
+    if repo is None:
+        # List and download through the run's artifact repository, not
+        # `MlflowClient.list_artifacts(run_id, ...)`: in MLflow 3 the latter
+        # also queries the logged-models endpoint, which older tracking
+        # servers (e.g. mlflow.dmidev.org) don't have, so it fails with a 404.
+        repo = get_artifact_repository(run.info.artifact_uri, tracking_uri=effective_uri)
     dest = download_dir / run_id
     dest.mkdir(parents=True, exist_ok=True)
 
-    configs = [f.path for f in client.list_artifacts(run_id, "config") if f.path.endswith((".yaml", ".yml"))]
+    configs = [f.path for f in repo.list_artifacts("config") if f.path.endswith((".yaml", ".yml"))]
     if not configs:
         raise FileNotFoundError(f"MLflow run {run_id} has no config YAML under config/")
     if len(configs) > 1:
         logger.warning(f"MLflow run {run_id} has several config files {configs}; using {configs[0]}")
-    config_path = Path(client.download_artifacts(run_id, configs[0], str(dest)))
+    config_path = Path(repo.download_artifacts(configs[0], str(dest)))
 
-    remote = _remote_checkpoints(client, run_id)
+    remote = _remote_checkpoints(repo)
     if remote:
         latest = max(remote, key=_step)
         local_copy = dest / latest
@@ -141,7 +157,7 @@ def resolve_resume_source(
             ckpt_path = local_copy
         else:
             logger.info(f"Downloading checkpoint {latest} from MLflow run {run_id}")
-            ckpt_path = Path(client.download_artifacts(run_id, latest, str(dest)))
+            ckpt_path = Path(repo.download_artifacts(latest, str(dest)))
     else:
         local = _local_checkpoints(local_root or Path.cwd(), run.info.experiment_id, run_id)
         if not local:

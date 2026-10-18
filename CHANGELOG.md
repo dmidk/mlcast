@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mlcast train --config mlflow:<run>` failed with a 404 against tracking servers older than MLflow 3 (e.g.
+  mlflow.dmidev.org): `MlflowClient.list_artifacts` in the MLflow 3 client also queries the logged-models endpoint.
+  Artifacts are now listed and downloaded through the run's artifact repository instead. @leifdenby
 - (pending upstream) A failed image upload in `NowcastLightningModule` (e.g. the MLflow proxy rejecting a large PNG with a 413) is
   now logged as a warning instead of killing the training run.
   [#23](https://github.com/mlcast-community/mlcast/pull/23) (open)
