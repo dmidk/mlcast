@@ -28,6 +28,7 @@ import argparse
 import ast
 import importlib.util
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -156,6 +157,9 @@ def _build_help_text(cfg: fdl.Buildable) -> Text:
     t.append("\n  # Resume from or reproduce a previously saved YAML config:\n", style="dim")
     t.append("  mlcast train ", style="bold")
     t.append("--config /path/to/config.yaml\n", style="cyan")
+    t.append("\n  # Resume an MLflow run (its config + latest checkpoint), e.g. with a longer max_time:\n", style="dim")
+    t.append("  mlcast train ", style="bold")
+    t.append("--config mlflow:<run id or URL> --config 'set:trainer.max_time=\"03:00:00:00\"'\n", style="cyan")
     t.append("\n  # Load a YAML config and apply additional overrides on top:\n", style="dim")
     t.append("  mlcast train ", style="bold")
     t.append("--config /path/to/config.yaml --config set:trainer.max_epochs=50\n", style="cyan")
@@ -297,6 +301,65 @@ def _extract_yaml_config_path(remaining: list[str]) -> tuple[str | None, list[st
             if val.endswith(".yaml") or val.endswith(".yml"):
                 return val, remaining[:i] + remaining[i + 1 :]
     return None, remaining
+
+
+MLFLOW_CONFIG_PREFIX = "mlflow:"
+RESUME_DOWNLOAD_DIR = Path(".mlcast-resume")
+
+
+def _extract_mlflow_run_ref(remaining: list[str]) -> tuple[str | None, list[str]]:
+    """Scan ``remaining`` for ``--config mlflow:<run>`` and remove it.
+
+    Accepts both ``--config mlflow:<run>`` and ``--config=mlflow:<run>``.
+
+    Parameters
+    ----------
+    remaining : list of str
+        The unparsed CLI tokens after argparse has consumed the subcommand.
+
+    Returns
+    -------
+    run_ref : str or None
+        The run reference after the ``mlflow:`` prefix, if found.
+    remaining : list of str
+        The flag list with the matching ``--config`` tokens removed.
+    """
+    remaining = list(remaining)
+    for i, arg in enumerate(remaining):
+        if arg == "--config" and i + 1 < len(remaining) and remaining[i + 1].startswith(MLFLOW_CONFIG_PREFIX):
+            return remaining[i + 1][len(MLFLOW_CONFIG_PREFIX) :], remaining[:i] + remaining[i + 2 :]
+        if arg.startswith("--config=" + MLFLOW_CONFIG_PREFIX):
+            return arg[len("--config=" + MLFLOW_CONFIG_PREFIX) :], remaining[:i] + remaining[i + 1 :]
+    return None, remaining
+
+
+def _resume_from_mlflow_run(run_ref: str, remaining: list[str]) -> list[str]:
+    """Seed the config from an MLflow run and resume from its latest checkpoint.
+
+    Downloads the run's config YAML and latest checkpoint (see
+    `mlcast.config.mlflow_resume`), seeds the Fiddle flag with the YAML, and
+    puts a ``resume_training`` fiddler first in ``remaining``, so the user's
+    own ``set:``/``fiddler:`` overrides are applied after it and can change
+    anything (e.g. a longer ``trainer.max_time``).
+
+    Parameters
+    ----------
+    run_ref : str
+        Run reference (id, ``runs:/<id>`` or UI URL).
+    remaining : list of str
+        The remaining CLI tokens.
+
+    Returns
+    -------
+    list of str
+        ``remaining`` with the ``resume_training`` fiddler prepended.
+    """
+    from .config.mlflow_resume import resolve_resume_source
+
+    source = resolve_resume_source(run_ref, download_dir=RESUME_DOWNLOAD_DIR)
+    _seed_fiddle_flag_from_yaml(str(source.config_path))
+    fiddler = f"fiddler:resume_training(ckpt_path='{source.ckpt_path}', mlflow_run_id='{source.run_id}')"
+    return [f"--config={fiddler}"] + remaining
 
 
 def _seed_fiddle_flag_from_yaml(yaml_path: str) -> None:
@@ -447,6 +510,14 @@ def cli() -> None:
         #   applied on top by Fiddle's flag machinery as normal
         yaml_path, remaining = _extract_yaml_config_path(remaining)
 
+        # Case 1b: resume an MLflow run, e.g. --config mlflow:<run id or URL>
+        #   Uses the run's own config YAML as the base and resumes from its
+        #   latest checkpoint; set:/fiddler: flags still apply on top
+        run_ref, remaining = _extract_mlflow_run_ref(remaining)
+        if run_ref is not None and yaml_path is not None:
+            print("Error: pass either a YAML config or --config mlflow:<run>, not both.", file=sys.stderr)
+            sys.exit(1)
+
         # Case 2: user supplied an explicit base config function
         #   e.g. --config=config:another_experiment_function
         has_explicit_config = any(
@@ -456,13 +527,15 @@ def cli() -> None:
         )
 
         # Case 3: no base config from either source — fall back to training_experiment
-        if not has_explicit_config and yaml_path is None:
+        if not has_explicit_config and yaml_path is None and run_ref is None:
             remaining = ["--config=config:training_experiment"] + remaining
 
         remaining = auto_quote_fiddle_strings(remaining)
 
         if yaml_path is not None:
             _seed_fiddle_flag_from_yaml(yaml_path)
+        if run_ref is not None:
+            remaining = _resume_from_mlflow_run(run_ref, remaining)
 
         app.run(train_main, argv=[sys.argv[0]] + remaining)
     elif args.command in ("build-sampling-index", "validate-sampling-index"):

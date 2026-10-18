@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its sampling index moved to `/dmidata/projects/cloudphysics/mlcast/`.
   [214dbd5](https://github.com/dmidk/mlcast/commit/214dbd5b8ee075be2f21d26ffb61dc8cb30ee286) @arjj8
   [90b7899](https://github.com/dmidk/mlcast/commit/90b7899faa8276aaea89edbee6926f162f44caf3) @leifdenby
+- Resuming training. `Experiment` has a `ckpt_path` passed to `Trainer.fit`, set by the new `resume_training`
+  fiddler, which restores the full training state (so `max_time` is the total budget). `mlcast train --config
+  mlflow:<run id, runs:/<id> or run URL>` resumes an MLflow run: it downloads the run's config and latest
+  checkpoint and keeps logging into the same run. `use_mlflow_logger` now uploads every checkpoint to the run
+  (`log_model="all"`); for older runs the local `<experiment_id>/<run_id>/checkpoints` is used. The config is
+  now uploaded as `config/config.yaml`, as the log message already said, instead of a random temp-file name.
+  @leifdenby
 
 ### Changed
 

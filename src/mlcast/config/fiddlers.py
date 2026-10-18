@@ -155,7 +155,10 @@ def use_mlflow_logger(
             "Set MLFLOW_TRACKING_URI to point to a remote tracking server, "
             "e.g. export MLFLOW_TRACKING_URI=http://localhost:5000"
         )
-    cfg.trainer.logger = fdl.Config(MLFlowLogger, experiment_name=cfg.trainer.logger.name)
+    # log_model="all" uploads every checkpoint to the run as it is saved, so a
+    # run can be resumed from any machine (see `resume_training` and
+    # `mlcast train --config mlflow:<run>`).
+    cfg.trainer.logger = fdl.Config(MLFlowLogger, experiment_name=cfg.trainer.logger.name, log_model="all")
     if tracking_uri is not None:
         cfg.trainer.logger.tracking_uri = tracking_uri
     cfg.trainer.callbacks.append(fdl.Config(LogSystemInfoCallback))
@@ -177,3 +180,32 @@ def use_mlflow_logger(
     )
     if not has_progress_bar:
         cfg.trainer.callbacks.append(fdl.Config(TQDMProgressBar))
+
+
+def resume_training(cfg: fdl.Config, ckpt_path: str, mlflow_run_id: str | None = None) -> None:
+    """Fiddler to resume training from a checkpoint.
+
+    Sets ``cfg.ckpt_path`` so that ``Trainer.fit`` restores the full
+    training state (weights, optimizer, LR scheduler, step counter and the
+    ``max_time`` timer, so ``max_time`` is the total budget, not the extra
+    time). With ``mlflow_run_id``, the MLflow logger logs into that existing
+    run instead of starting a new one, so the metric curves continue, and
+    checkpoint upload is switched on. ``mlcast train --config mlflow:<run>``
+    applies this fiddler for you.
+
+    Parameters
+    ----------
+    cfg : fdl.Config
+        The Fiddle configuration to mutate.
+    ckpt_path : str
+        Local path of the checkpoint to resume from.
+    mlflow_run_id : str, optional
+        MLflow run to continue logging into. Requires the trainer logger to
+        be an ``MLFlowLogger``.
+    """
+    cfg.ckpt_path = ckpt_path
+    if mlflow_run_id is not None:
+        if getattr(cfg.trainer.logger, "__fn_or_cls__", None) is not MLFlowLogger:
+            raise ValueError("resume_training(mlflow_run_id=...) needs an MLFlowLogger; apply use_mlflow_logger first")
+        cfg.trainer.logger.run_id = mlflow_run_id
+        cfg.trainer.logger.log_model = "all"
