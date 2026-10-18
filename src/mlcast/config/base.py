@@ -38,15 +38,23 @@ from ..nowcasting_module import NowcastLightningModule
 
 @dataclass
 class Experiment:
-    """Container for Lightning module, data module, and trainer."""
+    """Container for Lightning module, data module, and trainer.
+
+    ``ckpt_path``, when set, is passed to ``Trainer.fit`` to resume training
+    from a checkpoint: weights, optimizer and LR-scheduler state, the step
+    and epoch counters, and the ``max_time`` timer (so ``max_time`` is the
+    total across the original run and the resumed one). Set it with
+    ``set:ckpt_path=...`` or the ``resume_training`` fiddler.
+    """
 
     pl_module: pl.LightningModule
     data: pl.LightningDataModule
     trainer: pl.Trainer
+    ckpt_path: str | None = None
 
     def run(self) -> None:
         """Train and evaluate the configured model."""
-        self.trainer.fit(self.pl_module, datamodule=self.data)
+        self.trainer.fit(self.pl_module, datamodule=self.data, ckpt_path=self.ckpt_path)
         self.trainer.test(self.pl_module, datamodule=self.data)
 
 

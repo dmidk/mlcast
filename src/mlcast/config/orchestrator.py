@@ -95,12 +95,13 @@ def _log_experiment_config_yaml_file(cfg: fdl.Config, trainer: pl.Trainer) -> No
         print(f"Config saved to {path}")
 
     elif MLFlowLogger is not None and isinstance(logger, MLFlowLogger):
-        # log_artifact requires a real filesystem path, so use a temp file
-        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-            f.write(config_yaml)
-            tmp = Path(f.name)
-        logger.experiment.log_artifact(logger.run_id, str(tmp), artifact_path="config")
-        tmp.unlink()
+        # log_artifact requires a real filesystem path and keeps its basename,
+        # so write `config.yaml` into a temp dir. A fixed name means a resumed
+        # run (same MLflow run) replaces the file instead of adding a second one.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir) / "config.yaml"
+            tmp.write_text(config_yaml)
+            logger.experiment.log_artifact(logger.run_id, str(tmp), artifact_path="config")
         print("Config uploaded to MLflow as artifact under 'config/config.yaml'")
 
     elif WandbLogger is not None and isinstance(logger, WandbLogger):

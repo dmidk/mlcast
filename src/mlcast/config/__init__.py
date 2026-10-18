@@ -8,6 +8,7 @@ from .base import Experiment, training_experiment
 from .consistency_checks import validate_config
 from .dmi import dmi_500m_10min_convgru_experiment
 from .fiddlers import (
+    resume_training,
     set_variables,
     toggle_masking,
     use_anon_s3_dataset,
@@ -31,4 +32,5 @@ __all__ = [
     "use_ratio_splits",
     "use_mlflow_logger",
     "use_anon_s3_dataset",
+    "resume_training",
 ]
