@@ -9,7 +9,7 @@ import pytest
 from pytorch_lightning.loggers import MLFlowLogger
 
 from mlcast.__main__ import _extract_mlflow_run_ref
-from mlcast.config import Experiment, resume_training, training_experiment, use_mlflow_logger
+from mlcast.config import Experiment, mlflow_resume, resume_training, training_experiment, use_mlflow_logger
 from mlcast.config.mlflow_resume import parse_run_ref, resolve_resume_source
 
 RUN_ID = "52dd4f17fad94d2eb0ac8489c234f6c2"
@@ -39,26 +39,37 @@ def test_parse_run_ref_rejects_garbage(ref: str) -> None:
         parse_run_ref(ref)
 
 
-def _fake_client(artifacts: dict[str, list[tuple[str, bool]]], experiment_id: str = "114") -> MagicMock:
-    """MlflowClient stand-in: `artifacts` maps a directory ("" for the root) to (path, is_dir) entries."""
+ARTIFACT_URI = f"mlflow-artifacts:/114/{RUN_ID}/artifacts"
+
+
+def _fake_client(experiment_id: str = "114") -> MagicMock:
+    """MlflowClient stand-in that only knows about the run itself."""
     client = MagicMock()
-    client.get_run.return_value = SimpleNamespace(info=SimpleNamespace(experiment_id=experiment_id))
-    client.list_artifacts.side_effect = lambda run_id, path=None: [
+    client.get_run.return_value = SimpleNamespace(
+        info=SimpleNamespace(experiment_id=experiment_id, artifact_uri=ARTIFACT_URI)
+    )
+    return client
+
+
+def _fake_repo(artifacts: dict[str, list[tuple[str, bool]]]) -> MagicMock:
+    """ArtifactRepository stand-in: `artifacts` maps a directory ("" for the root) to (path, is_dir) entries."""
+    repo = MagicMock()
+    repo.list_artifacts.side_effect = lambda path=None: [
         SimpleNamespace(path=p, is_dir=d) for p, d in artifacts.get(path or "", [])
     ]
 
-    def download(run_id: str, path: str, dst: str) -> str:
+    def download(path: str, dst: str) -> str:
         out = Path(dst) / path
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(f"downloaded {path}")
         return str(out)
 
-    client.download_artifacts.side_effect = download
-    return client
+    repo.download_artifacts.side_effect = download
+    return repo
 
 
 def test_resolve_picks_latest_logged_checkpoint(tmp_path: Path) -> None:
-    client = _fake_client(
+    repo = _fake_repo(
         {
             "": [
                 ("config", True),
@@ -78,18 +89,50 @@ def test_resolve_picks_latest_logged_checkpoint(tmp_path: Path) -> None:
         }
     )
 
-    source = resolve_resume_source(RUN_ID, download_dir=tmp_path, local_root=tmp_path / "nowhere", client=client)
+    source = resolve_resume_source(
+        RUN_ID, download_dir=tmp_path, local_root=tmp_path / "nowhere", client=_fake_client(), repo=repo
+    )
 
     assert source.run_id == RUN_ID
     assert source.config_path == tmp_path / RUN_ID / "config" / "config.yaml"
     assert source.ckpt_path.name == "every-3h-epoch=0-step=79512.ckpt"
-    downloaded = [c.args[1] for c in client.download_artifacts.call_args_list]
+    downloaded = [c.args[0] for c in repo.download_artifacts.call_args_list]
     assert downloaded == ["config/config.yaml", "every-3h-epoch=0-step=79512/every-3h-epoch=0-step=79512.ckpt"]
+
+
+def test_resolve_lists_artifacts_via_the_runs_artifact_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artifacts go through the repository built from the run's artifact_uri, never
+    `MlflowClient.list_artifacts`, which in MLflow 3 also calls a logged-models
+    endpoint that older tracking servers lack (404)."""
+    client = _fake_client()
+    client.list_artifacts.side_effect = AssertionError("MlflowClient.list_artifacts must not be used")
+    repo = _fake_repo({"": [("config", True)], "config": [("config/config.yaml", False)]})
+    built_with = {}
+
+    def fake_get_artifact_repository(artifact_uri: str, tracking_uri: str | None = None) -> MagicMock:
+        built_with.update(artifact_uri=artifact_uri, tracking_uri=tracking_uri)
+        return repo
+
+    monkeypatch.setattr(mlflow_resume, "get_artifact_repository", fake_get_artifact_repository)
+    ckpt_dir = tmp_path / "114" / RUN_ID / "checkpoints"
+    ckpt_dir.mkdir(parents=True)
+    (ckpt_dir / "epoch=0-step=10.ckpt").write_text("ckpt")
+
+    resolve_resume_source(
+        f"https://mlflow.example.org/#/experiments/114/runs/{RUN_ID}",
+        download_dir=tmp_path / "dl",
+        local_root=tmp_path,
+        client=client,
+    )
+
+    assert built_with == {"artifact_uri": ARTIFACT_URI, "tracking_uri": "https://mlflow.example.org"}
 
 
 def test_resolve_reuses_already_downloaded_checkpoint(tmp_path: Path) -> None:
     ckpt = "epoch=0-step=10/epoch=0-step=10.ckpt"
-    client = _fake_client(
+    repo = _fake_repo(
         {
             "": [("config", True), ("epoch=0-step=10", True)],
             "config": [("config/config.yaml", False)],
@@ -100,28 +143,30 @@ def test_resolve_reuses_already_downloaded_checkpoint(tmp_path: Path) -> None:
     existing.parent.mkdir(parents=True)
     existing.write_text("already here")
 
-    source = resolve_resume_source(RUN_ID, download_dir=tmp_path, client=client)
+    source = resolve_resume_source(RUN_ID, download_dir=tmp_path, client=_fake_client(), repo=repo)
 
     assert source.ckpt_path == existing
-    assert [c.args[1] for c in client.download_artifacts.call_args_list] == ["config/config.yaml"]
+    assert [c.args[0] for c in repo.download_artifacts.call_args_list] == ["config/config.yaml"]
 
 
 def test_resolve_falls_back_to_local_checkpoints(tmp_path: Path) -> None:
-    client = _fake_client({"": [("config", True), ("logs", True)], "config": [("config/tmpabc.yaml", False)]})
+    repo = _fake_repo({"": [("config", True), ("logs", True)], "config": [("config/tmpabc.yaml", False)]})
     ckpt_dir = tmp_path / "root" / "114" / RUN_ID / "checkpoints"
     ckpt_dir.mkdir(parents=True)
     for name in ["epoch=0-step=4999.ckpt", "every-3h-epoch=0-step=79512.ckpt", "every-3h-epoch=0-step=11034.ckpt"]:
         (ckpt_dir / name).write_text("ckpt")
 
-    source = resolve_resume_source(RUN_ID, download_dir=tmp_path / "dl", local_root=tmp_path / "root", client=client)
+    source = resolve_resume_source(
+        RUN_ID, download_dir=tmp_path / "dl", local_root=tmp_path / "root", client=_fake_client(), repo=repo
+    )
 
     assert source.ckpt_path == ckpt_dir / "every-3h-epoch=0-step=79512.ckpt"
 
 
 def test_resolve_without_any_checkpoint_raises(tmp_path: Path) -> None:
-    client = _fake_client({"": [("config", True)], "config": [("config/config.yaml", False)]})
+    repo = _fake_repo({"": [("config", True)], "config": [("config/config.yaml", False)]})
     with pytest.raises(FileNotFoundError, match="no checkpoints"):
-        resolve_resume_source(RUN_ID, download_dir=tmp_path, local_root=tmp_path, client=client)
+        resolve_resume_source(RUN_ID, download_dir=tmp_path, local_root=tmp_path, client=_fake_client(), repo=repo)
 
 
 def test_resume_training_fiddler(monkeypatch: pytest.MonkeyPatch) -> None:
