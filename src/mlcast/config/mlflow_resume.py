@@ -7,11 +7,12 @@ the tracking server). The run's config YAML (logged under ``config/`` by
 
 Checkpoints are found in two places, in this order:
 
-1. the run's artifacts, where ``MLFlowLogger(log_model="all")`` uploads each
-   checkpoint into a directory named after it (``<stem>/<stem>.ckpt``);
+1. the run's artifacts, where ``MLFlowLogger(log_model="all")``
+   (``use_mlflow_logger(upload_checkpoints=True)``) uploads each checkpoint
+   into a directory named after it (``<stem>/<stem>.ckpt``);
 2. the run's local checkpoint directory,
-   ``<default_root_dir>/<experiment_id>/<run_id>/checkpoints``, for runs
-   from before checkpoints were uploaded (only on the machine that trained).
+   ``<default_root_dir>/<experiment_id>/<run_id>/checkpoints``, for runs that
+   didn't upload checkpoints (only on the machine that trained).
 
 "Latest" is the checkpoint with the highest ``step=N`` in its filename,
 which every Lightning ``ModelCheckpoint`` filename in mlcast includes.

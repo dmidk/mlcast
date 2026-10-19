@@ -155,9 +155,10 @@ mlcast train \
 # continuation as a new run, named <original>-from-step<N> and linked to the original
 # (nested under it in the UI via mlflow.parentRunId, plus mlcast.resumed_from_run and
 # mlcast.resumed_from_checkpoint tags). Step numbers carry on, so the curves line up.
-# Accepts a run id, runs:/<id> or the run's URL in the MLflow UI. use_mlflow_logger
-# uploads every checkpoint to the run, so this works from any machine; for runs from
-# before that, the local <experiment_id>/<run_id>/checkpoints is used.
+# Accepts a run id, runs:/<id> or the run's URL in the MLflow UI. Checkpoints are taken
+# from the run's artifacts if it uploaded them (use_mlflow_logger(upload_checkpoints=True),
+# then this works from any machine), otherwise from the local
+# <experiment_id>/<run_id>/checkpoints, i.e. on the machine that trained the run.
 mlcast train \
     --config mlflow:https://mlflow.example.org/#/experiments/114/runs/<run_id> \
     --config set:trainer.max_time='"03:00:00:00"'
@@ -293,7 +294,7 @@ experiment.run()              # trainer.fit() + trainer.test()
 
 | Fiddler | Arguments | What it does |
 |---------|-----------|--------------|
-| `use_mlflow_logger` | *(none)* | Replaces the default `TensorBoardLogger` with `MLFlowLogger` (uploading every checkpoint to the run) and appends `LogSystemInfoCallback`; respects the `MLFLOW_TRACKING_URI` environment variable |
+| `use_mlflow_logger` | `upload_checkpoints=False` (and others) | Replaces the default `TensorBoardLogger` with `MLFlowLogger` and appends `LogSystemInfoCallback`; respects the `MLFLOW_TRACKING_URI` environment variable. With `upload_checkpoints=True` every checkpoint is uploaded to the run; a refused upload is a warning, not a crash |
 | `resume_training` | `ckpt_path`, `mlflow_run_id=None`, `inplace=False`, `run_name=None` | Continues training from a checkpoint (full training state); with `mlflow_run_id`, logs to a new MLflow run linked to that one (or into it with `inplace=True`). Applied for you by `--config mlflow:<run>` |
 | `set_variables` | `standard_names` | Sets the list of input variables on the dataset and updates `network.input_channels` to match |
 | `toggle_masking` | `enabled` | Toggles masked-loss mode by setting both `dataset_factory.return_mask` and `pl_module.masked_loss` to the same value |

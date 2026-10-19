@@ -28,7 +28,8 @@ def test_dmi_500m_10min_convgru_experiment_config():
         }
     }
 
-    assert cfg.trainer.logger.__fn_or_cls__ is MLFlowLogger
+    assert issubclass(cfg.trainer.logger.__fn_or_cls__, MLFlowLogger)
+    assert cfg.trainer.logger.log_model is False  # mlflow.dmidev.org refuses ~770 MB checkpoint uploads
     assert cfg.trainer.logger.tracking_uri == "https://mlflow.dmidev.org/"
     assert cfg.trainer.logger.experiment_name == "dmi-500m-10min-convgru"
 

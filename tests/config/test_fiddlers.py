@@ -1,9 +1,9 @@
 import fiddle as fdl
 from pytorch_lightning.callbacks import ProgressBar, RichProgressBar, TQDMProgressBar
-from pytorch_lightning.loggers import MLFlowLogger
 
 from mlcast.callbacks import LogConsoleToMLflowCallback, LogTrainingProgressCallback
 from mlcast.config import set_variables, toggle_masking, training_experiment, use_mlflow_logger
+from mlcast.loggers import ResilientMLFlowLogger
 
 
 def test_fiddler_set_variables():
@@ -40,7 +40,7 @@ def test_fiddler_use_mlflow_logger_explicit_tracking_uri(monkeypatch):
 
     use_mlflow_logger(cfg, tracking_uri="https://mlflow.example.org/")
 
-    assert cfg.trainer.logger.__fn_or_cls__ is MLFlowLogger
+    assert cfg.trainer.logger.__fn_or_cls__ is ResilientMLFlowLogger
     assert cfg.trainer.logger.tracking_uri == "https://mlflow.example.org/"
 
 
@@ -51,7 +51,7 @@ def test_fiddler_use_mlflow_logger_defers_to_env_var(monkeypatch):
 
     use_mlflow_logger(cfg)
 
-    assert cfg.trainer.logger.__fn_or_cls__ is MLFlowLogger
+    assert cfg.trainer.logger.__fn_or_cls__ is ResilientMLFlowLogger
     assert not hasattr(cfg.trainer.logger, "tracking_uri") or cfg.trainer.logger.tracking_uri is None
 
 

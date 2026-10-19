@@ -6,11 +6,14 @@ from unittest.mock import MagicMock
 
 import fiddle as fdl
 import pytest
+from loguru import logger as log
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 
 from mlcast.__main__ import _extract_mlflow_run_ref
 from mlcast.config import Experiment, mlflow_resume, resume_training, training_experiment, use_mlflow_logger
 from mlcast.config.mlflow_resume import parse_run_ref, resolve_resume_source
+from mlcast.loggers import ResilientMLFlowLogger
 
 RUN_ID = "52dd4f17fad94d2eb0ac8489c234f6c2"
 
@@ -186,7 +189,8 @@ def test_resume_training_fiddler_starts_a_linked_run(monkeypatch: pytest.MonkeyP
         "mlcast.resumed_from_run": RUN_ID,
         "mlcast.resumed_from_checkpoint": "epoch=0-step=83299.ckpt",
     }
-    assert cfg.trainer.logger.log_model == "all"
+    assert cfg.trainer.logger.log_model is False
+    assert cfg.trainer.logger.__fn_or_cls__ is ResilientMLFlowLogger
 
 
 def test_resume_training_fiddler_drops_ids_inherited_from_a_resumed_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,7 +218,6 @@ def test_resume_training_fiddler_inplace(monkeypatch: pytest.MonkeyPatch) -> Non
     resume_training(cfg, ckpt_path="/ckpts/last.ckpt", mlflow_run_id=RUN_ID, inplace=True, run_name="ignored")
 
     assert cfg.trainer.logger.run_id == RUN_ID
-    assert cfg.trainer.logger.log_model == "all"
     assert cfg.trainer.logger.tags is None
     assert cfg.trainer.logger.run_name is None
 
@@ -229,14 +232,63 @@ def test_resume_training_fiddler_without_mlflow_logger() -> None:
         resume_training(cfg, ckpt_path="/ckpts/last.ckpt", mlflow_run_id=RUN_ID)
 
 
-def test_use_mlflow_logger_uploads_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_training_keeps_upload_setting_and_makes_old_configs_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A config saved by an older run (plain MLFlowLogger, log_model="all") resumes with the
+    resilient logger, so a refused checkpoint upload can't crash it; the upload setting is kept."""
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
+    cfg = training_experiment.as_buildable()
+    cfg.trainer.logger = fdl.Config(MLFlowLogger, experiment_name="x", log_model="all")
+
+    resume_training(cfg, ckpt_path="/ckpts/last.ckpt", mlflow_run_id=RUN_ID)
+
+    assert cfg.trainer.logger.__fn_or_cls__ is ResilientMLFlowLogger
+    assert cfg.trainer.logger.log_model == "all"
+    assert cfg.trainer.logger.experiment_name == "x"
+
+
+@pytest.mark.parametrize(("upload", "log_model"), [(False, False), (True, "all")])
+def test_use_mlflow_logger_checkpoint_upload_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch, upload: bool, log_model: bool | str
+) -> None:
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example.org/")
     cfg = training_experiment.as_buildable()
 
-    use_mlflow_logger(cfg)
+    if upload:
+        use_mlflow_logger(cfg, upload_checkpoints=True)
+    else:
+        use_mlflow_logger(cfg)
 
-    assert cfg.trainer.logger.__fn_or_cls__ is MLFlowLogger
-    assert cfg.trainer.logger.log_model == "all"
+    assert cfg.trainer.logger.__fn_or_cls__ is ResilientMLFlowLogger
+    assert cfg.trainer.logger.log_model == log_model
+
+
+def test_resilient_logger_turns_upload_failure_into_warning(tmp_path: Path) -> None:
+    """A refused upload is a warning, and the checkpoint isn't retried on the next save."""
+    ckpt = tmp_path / "epoch=1-step=88299.ckpt"
+    ckpt.write_text("ckpt")
+    logger = ResilientMLFlowLogger(experiment_name="x", tracking_uri=f"file://{tmp_path}/mlruns", log_model="all")
+    client = MagicMock()
+    client.log_artifact.side_effect = ConnectionError("EOF occurred in violation of protocol")
+    logger._mlflow_client = client
+    logger._run_id = RUN_ID
+    logger._initialized = True
+    callback = MagicMock(spec=ModelCheckpoint)
+    callback.last_model_path = ""
+    callback.best_model_path = str(ckpt)
+    callback.best_model_score = None
+    callback.best_k_models = {}
+    callback.save_top_k = 1
+    messages: list[str] = []
+    sink = log.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        logger.after_save_checkpoint(callback)
+        logger.after_save_checkpoint(callback)
+    finally:
+        log.remove(sink)
+
+    assert client.log_artifact.call_count == 1
+    assert len(messages) == 1
+    assert "Could not upload" in messages[0] and "EOF occurred" in messages[0]
 
 
 @pytest.mark.parametrize("ckpt_path", [None, "/ckpts/last.ckpt"])

@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Checkpoint upload to MLflow could crash training: mlflow.dmidev.org cuts the connection on ~770 MB uploads,
+  and Lightning's `MLFlowLogger` lets the error stop the run (a continuation died at its first validation). Upload
+  is now opt-in (`use_mlflow_logger(upload_checkpoints=True)`, default off), and the new `ResilientMLFlowLogger`
+  (used by `use_mlflow_logger` and `resume_training`, also for configs saved with plain `MLFlowLogger`) turns a
+  failed upload into a warning and doesn't retry that checkpoint. @leifdenby
 - A saved `config.yaml` with `(start, end)` date-range splits (e.g. the DMI config) can be built again: YAML has no
   tuples, so the ranges came back as lists and `validate_splits` rejected them, which broke `--config config.yaml`
   and `--config mlflow:<run>`. `SourceDataDataModule` now turns two-element lists back into tuples

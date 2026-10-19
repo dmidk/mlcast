@@ -21,6 +21,7 @@ from pytorch_lightning.loggers import MLFlowLogger
 
 from ..callbacks import LogConsoleToMLflowCallback, LogSystemInfoCallback, LogTrainingProgressCallback
 from ..data.source_data_datasets import SourceDataRandomSamplingDataset
+from ..loggers import ResilientMLFlowLogger
 
 
 def set_variables(cfg: fdl.Config, standard_names: list[str]) -> None:
@@ -120,10 +121,12 @@ def use_mlflow_logger(
     tracking_uri: str | None = None,
     console_upload_interval_seconds: float = 60.0,
     progress_log_interval_seconds: float = 60.0,
+    upload_checkpoints: bool = False,
 ) -> None:
     """Fiddler to switch the trainer logger to MLflow.
 
-    Replaces the default TensorBoardLogger with an MLFlowLogger, inheriting
+    Replaces the default TensorBoardLogger with an MLFlowLogger
+    (`ResilientMLFlowLogger`), inheriting
     the experiment name from the existing logger config. The run name is
     left unset, deferring to the ``MLFLOW_RUN_NAME`` environment variable
     (or MLflow's default). Also adds callbacks that log system info and
@@ -148,6 +151,13 @@ def use_mlflow_logger(
     progress_log_interval_seconds : float, optional
         Minimum seconds between the progress lines logged during training.
         Default 60.
+    upload_checkpoints : bool, optional
+        Upload every checkpoint to the run as it is saved, so the run can be
+        resumed from another machine with ``--config mlflow:<run>``. Off by
+        default: checkpoints are large (~770 MB for the 5-block ConvGRU) and
+        some servers refuse them (mlflow.dmidev.org does). A failed upload
+        is logged as a warning and doesn't stop training, but each attempt
+        can block it for minutes of retries.
     """
     if tracking_uri is None and not os.environ.get("MLFLOW_TRACKING_URI"):
         logger.warning(
@@ -155,10 +165,12 @@ def use_mlflow_logger(
             "Set MLFLOW_TRACKING_URI to point to a remote tracking server, "
             "e.g. export MLFLOW_TRACKING_URI=http://localhost:5000"
         )
-    # log_model="all" uploads every checkpoint to the run as it is saved, so a
-    # run can be resumed from any machine (see `resume_training` and
-    # `mlcast train --config mlflow:<run>`).
-    cfg.trainer.logger = fdl.Config(MLFlowLogger, experiment_name=cfg.trainer.logger.name, log_model="all")
+    # log_model="all" uploads every checkpoint to the run as it is saved.
+    cfg.trainer.logger = fdl.Config(
+        ResilientMLFlowLogger,
+        experiment_name=cfg.trainer.logger.name,
+        log_model="all" if upload_checkpoints else False,
+    )
     if tracking_uri is not None:
         cfg.trainer.logger.tracking_uri = tracking_uri
     cfg.trainer.callbacks.append(fdl.Config(LogSystemInfoCallback))
@@ -203,7 +215,10 @@ def resume_training(
     run can log its own config and status, which MLflow wouldn't allow in
     the original run (params are immutable). Step numbers continue from the
     checkpoint, so the runs' curves line up. With ``inplace=True`` the
-    original run is continued instead. Either way checkpoint upload is on.
+    original run is continued instead. Checkpoint upload stays as the
+    config has it (``set:trainer.logger.log_model=...`` to change it), and
+    the logger is switched to `ResilientMLFlowLogger`, so configs saved by
+    older runs with plain ``MLFlowLogger`` can't crash on an upload either.
 
     Parameters
     ----------
@@ -222,9 +237,10 @@ def resume_training(
     cfg.ckpt_path = ckpt_path
     if mlflow_run_id is None:
         return
-    if getattr(cfg.trainer.logger, "__fn_or_cls__", None) is not MLFlowLogger:
+    logger_cls = getattr(cfg.trainer.logger, "__fn_or_cls__", None)
+    if not (isinstance(logger_cls, type) and issubclass(logger_cls, MLFlowLogger)):
         raise ValueError("resume_training(mlflow_run_id=...) needs an MLFlowLogger; apply use_mlflow_logger first")
-    cfg.trainer.logger.log_model = "all"
+    fdl.update_callable(cfg.trainer.logger, ResilientMLFlowLogger)
     if inplace:
         cfg.trainer.logger.run_id = mlflow_run_id
         return
